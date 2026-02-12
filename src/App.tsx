@@ -494,9 +494,16 @@ export default function App() {
             `- ${t.date.split('T')[0]}: ${t.type} Rp${t.amount} (${t.category}) - ${t.description}`
         ).join('\n');
 
+        const accountsList = accounts.map(a =>
+            `- ${a.name} (${a.type}, Provider: ${a.provider}, ID: ${a.id})`
+        ).join('\n');
+
         const systemPrompt = `Anda adalah FinAI, asisten keuangan pribadi.
         Hari ini: ${dateString} (${isoDate}).
         
+        Data Akun User:
+        ${accountsList}
+
         Data Keuangan User (20 Transaksi Terakhir):
         ${recentTx}
         
@@ -508,10 +515,12 @@ export default function App() {
                "category": string, 
                "description": string,
                "date": "YYYY-MM-DD", 
+               "accountId": string (ID akun dari daftar diatas jika user menyebutkan spesifik, null jika tidak),
                "merchant": string (nama toko jika ada),
                "items": [{ "name": string, "qty": number, "price": number }]
              }
-           - PENTING: Perhatikan kata kunci waktu ("kemarin", "lusa", "tanggal 10") dalam TEKS untuk menentukan field "date". Jika hanya gambar, gunakan tanggal di struk (jika ada) atau hari ini.
+           - PENTING: Perhatikan kata kunci waktu ("kemarin", "lusa", "tanggal 10") dalam TEKS untuk menentukan field "date".
+           - PENTING: Jika user menyebut "ke BCA", "pakai Mandiri", atau "dompet", cari ID yang paling cocok di Data Akun.
            - Default date: hari ini (${isoDate}).
         2. Jika user bertanya (misal: "Total belanja kemarin?"), hitung dari data diatas dan jawab verbal (JANGAN JSON).
         3. Gunakan Bahasa Indonesia yang ramah.`;
