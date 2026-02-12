@@ -510,17 +510,18 @@ export default function App() {
         Tugas:
         1. Jika input adalah data transaksi (teks atau gambar struk):
            - Ekstrak JSON: { 
-               "type": "expense"|"income", 
+               "type": "expense"|"income"|"transfer", 
                "amount": number, 
                "category": string, 
                "description": string,
                "date": "YYYY-MM-DD", 
-               "accountId": string (ID akun dari daftar diatas jika user menyebutkan spesifik, null jika tidak),
+               "accountId": string (ID akun sumber/utama),
+               "toAccountId": string (ID akun tujuan, KHUSUS untuk tipe 'transfer'),
                "merchant": string (nama toko jika ada),
                "items": [{ "name": string, "qty": number, "price": number }]
              }
            - PENTING: Perhatikan kata kunci waktu ("kemarin", "lusa", "tanggal 10") dalam TEKS untuk menentukan field "date".
-           - PENTING: Jika user menyebut "ke BCA", "pakai Mandiri", atau "dompet", cari ID yang paling cocok di Data Akun.
+           - UNTUK TRANSFER: Cari ID akun sumber ("dari BCA") dan akun tujuan ("ke Tunai").
            - Default date: hari ini (${isoDate}).
         2. Jika user bertanya (misal: "Total belanja kemarin?"), hitung dari data diatas dan jawab verbal (JANGAN JSON).
         3. Gunakan Bahasa Indonesia yang ramah.`;
@@ -532,6 +533,12 @@ export default function App() {
                 { "type": "image_url", "image_url": { "url": `data:image/jpeg;base64,${imageToSend}` } }
             ];
         }
+
+        // Prepare History Context (Last 6 turns)
+        const history = messages.slice(-6).map(m => ({
+            role: m.role === 'ai' ? 'model' : 'user', // Gemini uses 'model' role
+            content: m.content
+        })).filter(m => typeof m.content === 'string'); // Ensure text content
 
         try {
             const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -546,6 +553,7 @@ export default function App() {
                     "model": "google/gemini-2.0-flash-001",
                     "messages": [
                         { "role": "system", "content": systemPrompt },
+                        ...history, // Inject history
                         { "role": "user", "content": userContent }
                     ]
                 })
@@ -574,7 +582,36 @@ export default function App() {
             if (jsonMatch) {
                 try {
                     const txData = JSON.parse(jsonMatch[0]);
-                    if ((txData.type === 'income' || txData.type === 'expense') && txData.amount) {
+
+                    // Handle Transfer
+                    if (txData.type === 'transfer' && txData.amount && txData.accountId && txData.toAccountId) {
+                        const fromAcc = accounts.find(a => a.id === txData.accountId);
+                        const toAcc = accounts.find(a => a.id === txData.toAccountId);
+
+                        if (fromAcc && toAcc) {
+                            // 1. Expense from Source
+                            await addTransaction({
+                                ...txData,
+                                type: 'expense',
+                                accountId: txData.accountId,
+                                description: `Transfer ke ${toAcc.name}`,
+                                category: 'Transfer'
+                            });
+                            // 2. Income to Destination
+                            await addTransaction({
+                                ...txData,
+                                type: 'income',
+                                accountId: txData.toAccountId,
+                                description: `Transfer dari ${fromAcc.name}`,
+                                category: 'Transfer'
+                            });
+                            finalContent = `Berhasil memindahkan Rp${formatCurrency(txData.amount)} dari ${fromAcc.name} ke ${toAcc.name}.`;
+                        } else {
+                            finalContent = "Gagal transfer: Akun sumber atau tujuan tidak ditemukan.";
+                        }
+                    }
+                    // Handle Income/Expense
+                    else if ((txData.type === 'income' || txData.type === 'expense') && txData.amount) {
                         await addTransaction({ ...txData });
                         const dateInfo = txData.date === isoDate ? "hari ini" : `tanggal ${txData.date}`;
                         const itemCount = txData.items ? `${txData.items.length} item` : "";
