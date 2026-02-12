@@ -308,6 +308,12 @@ export default function App() {
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Account[];
             setAccounts(data);
+
+            // Auto-create default account if absolutely no accounts exist (first run)
+            if (data.length === 0) {
+                ensureDefaultAccount();
+            }
+
             // Auto-select first active account if none selected
             if (!selectedAccountId && data.length > 0) {
                 const firstActive = data.find(a => a.isActive);
@@ -673,11 +679,7 @@ export default function App() {
     };
 
     // Auto-create default account on first login
-    useEffect(() => {
-        if (user && accounts.length === 0) {
-            ensureDefaultAccount();
-        }
-    }, [user, accounts]);
+
 
     const formatCurrency = (val: number) => Number(val || 0).toLocaleString('id-ID');
 
