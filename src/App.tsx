@@ -494,9 +494,13 @@ export default function App() {
             `- ${t.date.split('T')[0]}: ${t.type} Rp${t.amount} (${t.category}) - ${t.description}`
         ).join('\n');
 
-        const accountsList = accounts.map(a =>
-            `- ${a.name} (${a.type}, Provider: ${a.provider}, ID: ${a.id})`
-        ).join('\n');
+        const accountsList = accounts.map(a => {
+            const accTx = transactions.filter(t => t.accountId === a.id);
+            const income = accTx.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+            const expense = accTx.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+            const balance = (a.balance || 0) + income - expense;
+            return `- ${a.name} (Saldo: Rp${formatCurrency(balance)}, ID: ${a.id}, Tipe: ${a.type})`;
+        }).join('\n');
 
         const systemPrompt = `Anda adalah FinAI, asisten keuangan pribadi.
         Hari ini: ${dateString} (${isoDate}).
@@ -522,6 +526,7 @@ export default function App() {
              }
            - PENTING: Perhatikan kata kunci waktu ("kemarin", "lusa", "tanggal 10") dalam TEKS untuk menentukan field "date".
            - UNTUK TRANSFER: Cari ID akun sumber ("dari BCA") dan akun tujuan ("ke Tunai").
+           - PENTING: Jika user bilang "semua saldo", "sisanya", atau "habiskan", gunakan nilai SALDO TERAKHIR dari Data Akun untuk mengisi 'amount'.
            - Default date: hari ini (${isoDate}).
         2. Jika user bertanya (misal: "Total belanja kemarin?"), hitung dari data diatas dan jawab verbal (JANGAN JSON).
         3. Gunakan Bahasa Indonesia yang ramah.`;
