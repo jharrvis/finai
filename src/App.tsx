@@ -83,6 +83,19 @@ interface TransactionItem {
     price: number;
 }
 
+interface Account {
+    id: string;
+    name: string;              // "BCA Tabungan", "GoPay", "Cash"
+    type: 'bank' | 'ewallet' | 'cash' | 'credit_card';
+    provider: string;          // "BCA", "GoPay", "OVO", "Dana", "ShopeePay"
+    accountNumber?: string;    // optional, can be masked
+    balance: number;           // manual balance
+    color: string;             // for UI card (#0060AF for BCA, etc)
+    icon: string;              // provider icon emoji or name
+    isActive: boolean;
+    createdAt: number;
+}
+
 interface Transaction {
     id: string;
     type: 'income' | 'expense';
@@ -93,6 +106,8 @@ interface Transaction {
     date: string;
     items?: TransactionItem[];
     merchant?: string;
+    accountId: string;         // reference to account
+    toAccountId?: string;      // for transfers between accounts
 }
 
 interface Message {
@@ -188,6 +203,8 @@ export default function App() {
     const [user, setUser] = useState<User | null>(null);
     const [activeTab, setActiveTab] = useState('dashboard');
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [accounts, setAccounts] = useState<Account[]>([]);
+    const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [inputMessage, setInputMessage] = useState("");
@@ -204,6 +221,7 @@ export default function App() {
     const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
     const [filterCategory, setFilterCategory] = useState('All');
     const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+    // TODO: Add showAccountManager and accountForm state when implementing Account Manager UI
 
     // UI Feedback State
     const [notification, setNotification] = useState<Notification | null>(null);
@@ -274,6 +292,25 @@ export default function App() {
         });
         return () => unsubscribe();
     }, [user]);
+
+    // --- Fetch Accounts (Real-time) ---
+    useEffect(() => {
+        if (!user) return;
+        const q = query(
+            collection(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts'),
+            orderBy('createdAt', 'asc')
+        );
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Account[];
+            setAccounts(data);
+            // Auto-select first active account if none selected
+            if (!selectedAccountId && data.length > 0) {
+                const firstActive = data.find(a => a.isActive);
+                if (firstActive) setSelectedAccountId(firstActive.id);
+            }
+        });
+        return () => unsubscribe();
+    }, [user, selectedAccountId]);
 
     // --- Scroll to bottom of chat ---
     useEffect(() => {
@@ -495,6 +532,20 @@ export default function App() {
             });
 
             const result = await response.json();
+            console.log('[AI] Response status:', response.status, 'Result:', JSON.stringify(result).slice(0, 500));
+
+            if (!response.ok || result.error) {
+                const errorDetail = result.error?.message || result.error?.code || JSON.stringify(result.error) || `HTTP ${response.status}`;
+                console.error('[AI] API Error:', errorDetail);
+                const errMsg = `⚠️ Error AI: ${errorDetail}`;
+                setMessages(prev => [...prev, { role: 'ai', content: errMsg, id: Date.now() + 1 }]);
+                showNotification(errMsg, 'error');
+                if (aiMode === 'voice') speak(errMsg);
+                setIsProcessing(false);
+                setIsListening(false);
+                return;
+            }
+
             const aiText = result.choices?.[0]?.message?.content || "Maaf, saya tidak mengerti.";
 
             const jsonMatch = aiText.match(/\{[\s\S]*\}/);
@@ -542,8 +593,12 @@ export default function App() {
         const txDate = data.date ? new Date(data.date) : new Date();
         const isoDate = data.date || new Date().toISOString();
 
+        // Use provided accountId or default to selectedAccountId or first active account
+        const accountId = data.accountId || selectedAccountId || accounts.find(a => a.isActive)?.id || 'default-cash';
+
         await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'transactions'), {
             ...data,
+            accountId,
             date: isoDate.includes('T') ? isoDate : `${isoDate}T${new Date().toTimeString().split(' ')[0]}`,
             timestamp: txDate.getTime()
         });
@@ -568,6 +623,57 @@ export default function App() {
         if (selectedTransaction?.id === id) setSelectedTransaction(null);
         showNotification("Transaksi dihapus.", 'success');
     };
+
+    // --- Account Management Functions ---
+    const createAccount = async (accountData: Omit<Account, 'id' | 'createdAt'>) => {
+        if (!user) return;
+        await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts'), {
+            ...accountData,
+            createdAt: Date.now()
+        });
+        showNotification(`Akun ${accountData.name} berhasil ditambahkan!`, 'success');
+    };
+
+    // TODO: Uncomment when implementing Account Manager UI
+    // const updateAccount = async (id: string, updates: Partial<Account>) => {
+    //     if (!user) return;
+    //     await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id), updates);
+    //     showNotification("Akun berhasil diupdate!", 'success');
+    // };
+
+    // const deleteAccount = async (id: string) => {
+    //     if (!user) return;
+    //     // Check if there are transactions linked to this account
+    //     const linkedTx = transactions.filter(t => t.accountId === id);
+    //     if (linkedTx.length > 0) {
+    //         showNotification(`Tidak bisa hapus akun dengan ${linkedTx.length} transaksi terkait.`, 'error');
+    //         return;
+    //     }
+    //     await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id));
+    //     if (selectedAccountId === id) setSelectedAccountId(null);
+    //     showNotification("Akun dihapus.", 'success');
+    // };
+
+    // Create default "Cash" account if none exist
+    const ensureDefaultAccount = async () => {
+        if (!user || accounts.length > 0) return;
+        await createAccount({
+            name: 'Tunai',
+            type: 'cash',
+            provider: 'Cash',
+            balance: 0,
+            color: '#10b981',
+            icon: '💵',
+            isActive: true
+        });
+    };
+
+    // Auto-create default account on first login
+    useEffect(() => {
+        if (user && accounts.length === 0) {
+            ensureDefaultAccount();
+        }
+    }, [user, accounts]);
 
     const formatCurrency = (val: number) => Number(val || 0).toLocaleString('id-ID');
 
