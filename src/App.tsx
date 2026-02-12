@@ -964,7 +964,11 @@ export default function App() {
                             const monthlyTx = transactions.filter(t => t.date.startsWith(currentMonth));
                             const monthIncome = monthlyTx.filter(t => t.type === 'income').reduce((a, t) => a + t.amount, 0);
                             const monthExpense = monthlyTx.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
-                            const totalBalance = transactions.reduce((a, t) => a + (t.type === 'income' ? t.amount : -t.amount), 0);
+
+                            // Calculate Total Balance: Sum of all accounts' initial balance + sum of all transactions
+                            const totalInitialBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
+                            const totalTransactions = transactions.reduce((a, t) => a + (t.type === 'income' ? t.amount : -t.amount), 0);
+                            const totalBalance = totalInitialBalance + totalTransactions;
 
                             // Today's spending
                             const todayStr = now.toISOString().split('T')[0];
@@ -1017,27 +1021,35 @@ export default function App() {
                                         </div>
 
                                         {/* Individual Account Cards */}
-                                        {accounts.map(acc => (
-                                            <div
-                                                key={acc.id}
-                                                onClick={() => setSelectedAccountId(acc.id === selectedAccountId ? null : acc.id)}
-                                                className={`relative min-w-[75%] snap-center overflow-hidden p-6 rounded-[32px] text-white shadow-xl transition-all duration-300 border-2 ${selectedAccountId === acc.id ? 'ring-4 ring-offset-2 ring-indigo-500 border-transparent' : 'border-transparent scale-95 opacity-80'}`}
-                                                style={{ backgroundColor: acc.color }}
-                                            >
-                                                <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
-                                                <div className="flex justify-between items-start mb-4">
-                                                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl backdrop-blur-sm">
-                                                        {acc.icon}
+                                        {accounts.map(acc => {
+                                            // Calculate dynamic balance for this account
+                                            const accTx = transactions.filter(t => t.accountId === acc.id);
+                                            const accIncome = accTx.filter(t => t.type === 'income').reduce((a, t) => a + t.amount, 0);
+                                            const accExpense = accTx.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
+                                            const effectiveBalance = (acc.balance || 0) + accIncome - accExpense;
+
+                                            return (
+                                                <div
+                                                    key={acc.id}
+                                                    onClick={() => setSelectedAccountId(acc.id === selectedAccountId ? null : acc.id)}
+                                                    className={`relative min-w-[75%] snap-center overflow-hidden p-6 rounded-[32px] text-white shadow-xl transition-all duration-300 border-2 ${selectedAccountId === acc.id ? 'ring-4 ring-offset-2 ring-indigo-500 border-transparent' : 'border-transparent scale-95 opacity-80'}`}
+                                                    style={{ backgroundColor: acc.color }}
+                                                >
+                                                    <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                                                    <div className="flex justify-between items-start mb-4">
+                                                        <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl backdrop-blur-sm">
+                                                            {acc.icon}
+                                                        </div>
+                                                        <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${selectedAccountId === acc.id ? 'bg-white text-slate-900' : 'bg-black/20 text-white'}`}>
+                                                            {selectedAccountId === acc.id ? 'Aktif' : acc.type}
+                                                        </div>
                                                     </div>
-                                                    <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${selectedAccountId === acc.id ? 'bg-white text-slate-900' : 'bg-black/20 text-white'}`}>
-                                                        {selectedAccountId === acc.id ? 'Aktif' : acc.type}
-                                                    </div>
+                                                    <p className="opacity-80 text-xs font-bold mb-1">{acc.provider}</p>
+                                                    <h3 className="text-2xl font-black mb-1 tracking-tight">{acc.name}</h3>
+                                                    <p className="text-sm font-medium opacity-90">Rp {formatCurrency(effectiveBalance)}</p>
                                                 </div>
-                                                <p className="opacity-80 text-xs font-bold mb-1">{acc.provider}</p>
-                                                <h3 className="text-2xl font-black mb-1 tracking-tight">{acc.name}</h3>
-                                                <p className="text-sm font-medium opacity-90">Rp {formatCurrency(acc.balance)}</p>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
 
                                         {/* Add Account Button */}
                                         <div className="min-w-[20%] snap-center flex items-center justify-center">
