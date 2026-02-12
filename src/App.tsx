@@ -12,6 +12,7 @@ import {
     getFirestore,
     collection,
     addDoc,
+    updateDoc,
     deleteDoc,
     doc,
     onSnapshot,
@@ -37,6 +38,9 @@ import {
     Sun,
     Trash2,
     Calendar,
+    Plus,
+    Edit,
+    Save,
     ShoppingBag,
     Bot,
     Camera,
@@ -221,7 +225,8 @@ export default function App() {
     const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
     const [filterCategory, setFilterCategory] = useState('All');
     const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-    // TODO: Add showAccountManager and accountForm state when implementing Account Manager UI
+    const [showAccountManager, setShowAccountManager] = useState(false);
+    const [accountForm, setAccountForm] = useState<Partial<Account> | null>(null);
 
     // UI Feedback State
     const [notification, setNotification] = useState<Notification | null>(null);
@@ -634,25 +639,24 @@ export default function App() {
         showNotification(`Akun ${accountData.name} berhasil ditambahkan!`, 'success');
     };
 
-    // TODO: Uncomment when implementing Account Manager UI
-    // const updateAccount = async (id: string, updates: Partial<Account>) => {
-    //     if (!user) return;
-    //     await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id), updates);
-    //     showNotification("Akun berhasil diupdate!", 'success');
-    // };
+    const updateAccount = async (id: string, updates: Partial<Account>) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id), updates);
+        showNotification("Akun berhasil diupdate!", 'success');
+    };
 
-    // const deleteAccount = async (id: string) => {
-    //     if (!user) return;
-    //     // Check if there are transactions linked to this account
-    //     const linkedTx = transactions.filter(t => t.accountId === id);
-    //     if (linkedTx.length > 0) {
-    //         showNotification(`Tidak bisa hapus akun dengan ${linkedTx.length} transaksi terkait.`, 'error');
-    //         return;
-    //     }
-    //     await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id));
-    //     if (selectedAccountId === id) setSelectedAccountId(null);
-    //     showNotification("Akun dihapus.", 'success');
-    // };
+    const deleteAccount = async (id: string) => {
+        if (!user) return;
+        // Check if there are transactions linked to this account
+        const linkedTx = transactions.filter(t => t.accountId === id);
+        if (linkedTx.length > 0) {
+            showNotification(`Tidak bisa hapus akun dengan ${linkedTx.length} transaksi terkait.`, 'error');
+            return;
+        }
+        await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id));
+        if (selectedAccountId === id) setSelectedAccountId(null);
+        showNotification("Akun dihapus.", 'success');
+    };
 
     // Create default "Cash" account if none exist
     const ensureDefaultAccount = async () => {
@@ -985,21 +989,62 @@ export default function App() {
 
                             return (
                                 <>
-                                    {/* Main Balance Card */}
-                                    <div className="relative overflow-hidden bg-slate-900 dark:bg-indigo-600 p-8 rounded-[32px] text-white shadow-2xl transition-colors duration-300">
-                                        <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl"></div>
-                                        <p className="opacity-70 text-xs font-medium uppercase tracking-widest mb-2">Total Saldo</p>
-                                        <h2 className="text-3xl font-black mb-1 tracking-tight">Rp {formatCurrency(totalBalance)}</h2>
-                                        <p className="text-[10px] opacity-50 mb-6">Dari semua transaksi</p>
-                                        <div className="flex gap-4">
-                                            <div className="flex-1 bg-white/10 backdrop-blur-md p-3 rounded-2xl">
-                                                <p className="text-[10px] opacity-60 mb-1">Pemasukan Bulan Ini</p>
-                                                <p className="font-bold text-sm text-emerald-300">+{formatCurrency(monthIncome)}</p>
+                                    {/* Multi-Account Carousel & Balance */}
+                                    <div className="flex overflow-x-auto gap-4 pb-4 -mx-6 px-6 snap-x scrollbar-hide">
+                                        {/* Total Balance Card */}
+                                        <div className="relative min-w-[85%] snap-center overflow-hidden bg-slate-900 dark:bg-indigo-600 p-8 rounded-[32px] text-white shadow-2xl transition-colors duration-300">
+                                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-3xl"></div>
+                                            <div className="flex justify-between items-start mb-2">
+                                                <p className="opacity-70 text-xs font-medium uppercase tracking-widest">Total Saldo</p>
+                                                <button onClick={() => setShowAccountManager(true)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors">
+                                                    <Settings size={16} />
+                                                </button>
                                             </div>
-                                            <div className="flex-1 bg-white/10 backdrop-blur-md p-3 rounded-2xl">
-                                                <p className="text-[10px] opacity-60 mb-1">Pengeluaran Bulan Ini</p>
-                                                <p className="font-bold text-sm text-rose-300">-{formatCurrency(monthExpense)}</p>
+                                            <h2 className="text-3xl font-black mb-1 tracking-tight">Rp {formatCurrency(totalBalance)}</h2>
+                                            <p className="text-[10px] opacity-50 mb-6 font-medium">Semua Akun ({accounts.length})</p>
+                                            <div className="flex gap-4">
+                                                <div className="flex-1 bg-white/10 backdrop-blur-md p-3 rounded-2xl">
+                                                    <p className="text-[10px] opacity-60 mb-1">Masuk</p>
+                                                    <p className="font-bold text-sm text-emerald-300">+{formatCurrency(monthIncome)}</p>
+                                                </div>
+                                                <div className="flex-1 bg-white/10 backdrop-blur-md p-3 rounded-2xl">
+                                                    <p className="text-[10px] opacity-60 mb-1">Keluar</p>
+                                                    <p className="font-bold text-sm text-rose-300">-{formatCurrency(monthExpense)}</p>
+                                                </div>
                                             </div>
+                                        </div>
+
+                                        {/* Individual Account Cards */}
+                                        {accounts.map(acc => (
+                                            <div
+                                                key={acc.id}
+                                                onClick={() => setSelectedAccountId(acc.id === selectedAccountId ? null : acc.id)}
+                                                className={`relative min-w-[75%] snap-center overflow-hidden p-6 rounded-[32px] text-white shadow-xl transition-all duration-300 border-2 ${selectedAccountId === acc.id ? 'ring-4 ring-offset-2 ring-indigo-500 border-transparent' : 'border-transparent scale-95 opacity-80'}`}
+                                                style={{ backgroundColor: acc.color }}
+                                            >
+                                                <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                                                <div className="flex justify-between items-start mb-4">
+                                                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl backdrop-blur-sm">
+                                                        {acc.icon}
+                                                    </div>
+                                                    <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${selectedAccountId === acc.id ? 'bg-white text-slate-900' : 'bg-black/20 text-white'}`}>
+                                                        {selectedAccountId === acc.id ? 'Aktif' : acc.type}
+                                                    </div>
+                                                </div>
+                                                <p className="opacity-80 text-xs font-bold mb-1">{acc.provider}</p>
+                                                <h3 className="text-2xl font-black mb-1 tracking-tight">{acc.name}</h3>
+                                                <p className="text-sm font-medium opacity-90">Rp {formatCurrency(acc.balance)}</p>
+                                            </div>
+                                        ))}
+
+                                        {/* Add Account Button */}
+                                        <div className="min-w-[20%] snap-center flex items-center justify-center">
+                                            <button
+                                                onClick={() => { setShowAccountManager(true); setAccountForm({ type: 'bank', color: '#6366f1', icon: '🏦', balance: 0, isActive: true }); }}
+                                                className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 transition-colors shadow-sm"
+                                            >
+                                                <Plus size={24} />
+                                            </button>
                                         </div>
                                     </div>
 
@@ -1353,6 +1398,134 @@ export default function App() {
                     </button>
                 </div>
             </nav>
+
+            {/* Account Manager Modal */}
+            {showAccountManager && (
+                <div className="fixed inset-0 z-[170] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-bold">Kelola Akun</h3>
+                            <button onClick={() => { setShowAccountManager(false); setAccountForm(null); }} className="p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><X size={20} /></button>
+                        </div>
+
+                        {!accountForm ? (
+                            <>
+                                <div className="space-y-4 mb-8">
+                                    {accounts.map(acc => (
+                                        <div key={acc.id} className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700">
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-12 h-12 rounded-xl flex items-center justify-center text-xl shadow-sm" style={{ backgroundColor: acc.color + '20', color: acc.color }}>
+                                                    {acc.icon}
+                                                </div>
+                                                <div>
+                                                    <h4 className="font-bold">{acc.name}</h4>
+                                                    <p className="text-xs text-slate-500">{acc.provider} • {formatCurrency(acc.balance)}</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setAccountForm(acc)} className="p-2 text-slate-400 hover:text-indigo-500"><Edit size={18} /></button>
+                                                <button onClick={() => deleteAccount(acc.id)} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={18} /></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setAccountForm({ type: 'bank', color: '#6366f1', icon: '🏦', balance: 0, isActive: true })}
+                                    className="w-full py-4 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg shadow-indigo-200 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Plus size={20} /> Tambah Akun Baru
+                                </button>
+                            </>
+                        ) : (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase ml-1">Nama Akun</label>
+                                    <input
+                                        value={accountForm.name || ''}
+                                        onChange={e => setAccountForm({ ...accountForm, name: e.target.value })}
+                                        className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl mt-1 font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                                        placeholder="Contoh: BCA Utama"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">Tipe</label>
+                                        <select
+                                            value={accountForm.type || 'bank'}
+                                            onChange={e => setAccountForm({ ...accountForm, type: e.target.value as any })}
+                                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl mt-1 font-bold focus:outline-none"
+                                        >
+                                            <option value="bank">Bank</option>
+                                            <option value="ewallet">E-Wallet</option>
+                                            <option value="cash">Tunai</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">Saldo Awal</label>
+                                        <input
+                                            type="number"
+                                            value={accountForm.balance || 0}
+                                            onChange={e => setAccountForm({ ...accountForm, balance: Number(e.target.value) })}
+                                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl mt-1 font-bold focus:outline-none"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase ml-1">Provider / Bank</label>
+                                    <input
+                                        value={accountForm.provider || ''}
+                                        onChange={e => setAccountForm({ ...accountForm, provider: e.target.value })}
+                                        className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl mt-1 font-bold focus:outline-none"
+                                        placeholder="Contoh: BCA, GoPay, Dompet"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">Warna</label>
+                                        <input
+                                            type="color"
+                                            value={accountForm.color || '#6366f1'}
+                                            onChange={e => setAccountForm({ ...accountForm, color: e.target.value })}
+                                            className="w-full h-14 bg-slate-50 dark:bg-slate-800 p-2 rounded-2xl mt-1 cursor-pointer"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase ml-1">Icon</label>
+                                        <input
+                                            value={accountForm.icon || '🏦'}
+                                            onChange={e => setAccountForm({ ...accountForm, icon: e.target.value })}
+                                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl mt-1 font-bold text-center"
+                                            placeholder="Emoji"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex gap-3 pt-4">
+                                    <button
+                                        onClick={() => setAccountForm(null)}
+                                        className="flex-1 py-4 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold hover:bg-slate-200 transition-colors"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (accountForm.id) {
+                                                updateAccount(accountForm.id, accountForm);
+                                            } else {
+                                                createAccount(accountForm as any);
+                                            }
+                                            setAccountForm(null);
+                                        }}
+                                        className="flex-1 py-4 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg shadow-indigo-200 hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Save size={20} /> Simpan
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 }
