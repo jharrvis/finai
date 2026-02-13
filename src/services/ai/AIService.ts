@@ -52,7 +52,8 @@ export class AIService {
             );
 
             // STEP 6: Handle Response & Parse JSON
-            return handleAIResponse(responseText, intent);
+            // UPDATED: Pass accounts & transactions for validation
+            return handleAIResponse(responseText, intent, accounts, transactions);
 
         } catch (error: any) {
             console.error('[AIService] Error:', error);

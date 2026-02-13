@@ -31,12 +31,15 @@ ATURAN PENTING:
 3. ACCOUNT ID:
    - WAJIB pilih dari Data Akun di atas
    - Matching: "BCA" → cari ID akun dengan name="BCA"
-   - Default: gunakan akun pertama jika tidak disebutkan
+   - JIKA DAN HANYA JIKA tidak ada informasi akun yang jelas di input/gambar:
+     a. Set "accountId" = "" (string kosong)
+     b. Set "requiresClarification" = true
+   - JANGAN MENEBAK jika tidak yakin!
+   - Default: gunakan akun pertama HANYA JIKA user bilang "default" atau "biasa"
 
 4. TRANSFER:
    - HARUS ada accountId (sumber) DAN toAccountId (tujuan)
-   - Contoh: "transfer 100rb dari BCA ke Tunai"
-     → accountId: ID_BCA, toAccountId: ID_TUNAI
+   - Jika sumber tidak jelas, set "requiresClarification" = true
 
 41. CATEGORY (WAJIB PILIH SATU DARI INI):
 42.    - ${categories}

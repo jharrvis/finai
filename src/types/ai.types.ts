@@ -28,6 +28,18 @@ export interface TransactionData {
     toAccountId?: string; // For transfers
     merchant?: string;
     items?: { name: string; qty: number; price: number }[];
+    requiresClarification?: boolean;
+    isReconciliation?: boolean;
+    reconciliationData?: {
+        recordedBalance: number;
+        actualBalance: number;
+        difference: number;
+    };
+    isRecurring?: boolean;
+    recurringInfo?: {
+        frequency: 'daily' | 'weekly' | 'monthly';
+        nextExpected: string;
+    };
 }
 
 export interface AIResponse {
@@ -35,5 +47,6 @@ export interface AIResponse {
     data?: any;
     message?: string;
     error?: string;
+    warning?: string; // New field for non-blocking alerts
     intent?: Intent;
 }

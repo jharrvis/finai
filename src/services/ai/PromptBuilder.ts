@@ -1,11 +1,12 @@
+import { FinancialCore } from '../financial/FinancialCore';
+import { transactionPromptV2 } from '../../config/prompts/transaction-prompts-v2';
 import { Intent } from '../../types/ai.types';
+import { CATEGORIES } from '../../config/financial.config';
 import { basePrompt } from '../../config/prompts/base.prompts';
-import { transactionPrompt } from '../../config/prompts/transaction.prompts';
 import { queryPrompt } from '../../config/prompts/query.prompts';
 import { advicePrompt } from '../../config/prompts/advice.prompts';
 import { planningPrompt } from '../../config/prompts/planning.prompts';
 import { analysisPrompt } from '../../config/prompts/analysis.prompts';
-import { CATEGORIES } from '../../config/financial.config';
 
 export const buildContext = (
     intent: Intent,
@@ -14,14 +15,20 @@ export const buildContext = (
     isoDate: string,
     categories: string[] = CATEGORIES // Default to static config if not provided
 ): string => {
-    // 1. Format Accounts List with Real-time Balances
+    // 1. Calculate REAL-TIME Balances using FinancialCore
+    const balances = FinancialCore.calculateAllBalances(accounts, transactions);
+
+    // Format for Prompt (simple list)
     const accountsList = accounts.map(a => {
-        const accTx = transactions.filter(t => t.accountId === a.id);
-        const income = accTx.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-        const expense = accTx.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-        const balance = (a.balance || 0) + income - expense;
-        return `- ${a.name} (Saldo: Rp${balance.toLocaleString('id-ID')}, ID: ${a.id}, Tipe: ${a.type})`;
+        const bal = balances.find(b => b.accountId === a.id);
+        const balanceVal = bal ? bal.currentBalance : (a.balance || 0);
+        return `- ${a.name} (Saldo: Rp${balanceVal.toLocaleString('id-ID')}, ID: ${a.id}, Tipe: ${a.type})`;
     }).join('\n');
+
+    // Format for Transaction Prompt (detailed)
+    const accountBalances = balances.map(b =>
+        `- ${b.accountName}: Rp${b.currentBalance.toLocaleString('id-ID')} (ID: ${b.accountId})`
+    ).join('\n');
 
     const today = new Date();
     const dateString = today.toLocaleDateString('id-ID', {
@@ -31,9 +38,14 @@ export const buildContext = (
     // 2. Base System Prompt
     let systemPrompt = basePrompt(dateString, isoDate) + '\n\n';
 
-    // 3. For transaction, we only need account list
+    // 3. For transaction, use NEW PROMPT with financial concepts
     if (intent.type === 'transaction') {
-        return systemPrompt + transactionPrompt(accountsList, isoDate, categories.join(', '));
+        return systemPrompt + transactionPromptV2(
+            accountsList,
+            isoDate,
+            categories.join(', '),
+            accountBalances // NEW: Pass real-time balances
+        );
     }
 
     // 4. For other intents, we need transaction history

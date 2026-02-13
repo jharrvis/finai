@@ -62,8 +62,14 @@ import { AIService } from './services/ai/AIService';
 import { BudgetAlertWidget } from './components/BudgetAlertWidget';
 import { Budget } from './types/budget.types';
 import { CATEGORIES } from './config/financial.config';
-import { AnalyticsService } from './services/financial/AnalyticsService';
 import { CategoryService } from './services/financial/CategoryService';
+import { TransactionData } from './types/ai.types';
+import { FinancialCore } from './services/financial/FinancialCore';
+import { FinancialReportService } from './services/financial/FinancialReportService';
+import { TransactionDisplayService } from './services/financial/TransactionDisplayService';
+import { ReconciliationModal } from './components/modals/ReconciliationModal';
+
+
 
 
 // --- Configuration ---
@@ -100,6 +106,17 @@ interface Transaction {
     merchant?: string;
     accountId: string;         // reference to account
     toAccountId?: string;      // for transfers between accounts
+    isReconciliation?: boolean;
+    reconciliationData?: {
+        recordedBalance: number;
+        actualBalance: number;
+        difference: number;
+    };
+    isRecurring?: boolean;
+    recurringInfo?: {
+        frequency: 'daily' | 'weekly' | 'monthly';
+        nextExpected: string;
+    };
 }
 
 interface Message {
@@ -228,6 +245,8 @@ export default function App() {
     const [categories, setCategories] = useState<string[]>([]);
     const [newCategoryName, setNewCategoryName] = useState('');
     const [showCategorySettings, setShowCategorySettings] = useState(false);
+    const [pendingTransaction, setPendingTransaction] = useState<TransactionData | null>(null);
+    const [reconciliationModalOpen, setReconciliationModalOpen] = useState(false);
 
     const [showBudgetWidget, setShowBudgetWidget] = useState(() => {
         return localStorage.getItem('showBudgetWidget') !== 'false';
@@ -558,6 +577,37 @@ export default function App() {
         }
     };
 
+
+
+
+
+    // Handle Account Clarification
+    const handleAccountSelection = async (selectedAccountId: string) => {
+        if (!pendingTransaction) return;
+
+        const account = accounts.find(a => a.id === selectedAccountId);
+        if (!account) return;
+
+        const finalTransaction = {
+            ...pendingTransaction,
+            accountId: selectedAccountId,
+            requiresClarification: false // Clear flag
+        };
+
+        // Use new AIService
+        await addTransaction(finalTransaction);
+
+        const userMsg: Message = { role: 'user', content: `Menggunakan akun ${account.name}`, id: Date.now() };
+        setMessages((prev) => [...prev, userMsg]);
+
+        const aiMsg: Message = { role: 'ai', content: `✅ ${finalTransaction.description} sebesar Rp${finalTransaction.amount.toLocaleString('id-ID')} berhasil dicatat dengan akun ${account.name}.`, id: Date.now() + 1 };
+        setMessages((prev) => [...prev, aiMsg]);
+
+        if (aiMode === 'voice') speak(aiMsg.content);
+
+        setPendingTransaction(null);
+    };
+
     // --- AI Logic ---
     const processAIInput = async (text: string, base64Override: string | null = null) => {
         if (!user) return;
@@ -596,42 +646,45 @@ export default function App() {
                 if (response.intent?.type === 'transaction' && response.data) {
                     const txData = response.data;
 
-                    // Handle Transfer
+                    // NEW: Show warning if exists
+                    if (response.warning) {
+                        showNotification(response.warning, 'info');
+                    }
+
+                    // Handle Ambiguity (Account selection)
+                    if (txData.requiresClarification) {
+                        setPendingTransaction(txData);
+                        const question = "Pembayaran ini menggunakan akun mana?";
+                        setMessages((prev: any) => [...prev, { role: 'ai', content: question, id: Date.now() }]);
+                        if (aiMode === 'voice') speak(question);
+                        return; // Stop processing, wait for user input
+                    }
+
+                    // Handle Transfer with FinancialLogicService
                     if (txData.type === 'transfer') {
                         const fromAcc = accounts.find(a => a.id === txData.accountId);
                         const toAcc = accounts.find(a => a.id === txData.toAccountId);
 
                         if (fromAcc && toAcc) {
-                            // 1. Expense from Source
-                            await addTransaction({
-                                ...txData,
-                                type: 'expense',
-                                accountId: txData.accountId,
-                                description: `Transfer ke ${toAcc.name}`,
-                                category: 'Transfer'
-                            });
-                            // 2. Income to Destination
-                            await addTransaction({
-                                ...txData,
-                                type: 'income',
-                                accountId: txData.toAccountId,
-                                description: `Transfer dari ${fromAcc.name}`,
-                                category: 'Transfer'
-                            });
-                            const msg = `✅ Berhasil transfer Rp${txData.amount.toLocaleString('id-ID')} dari ${fromAcc.name} ke ${toAcc.name}.`;
+                            // Use FinancialLogicService to create double-entry transactions
+                            const [expenseTx, incomeTx] = FinancialCore.createTransferTransactions(
+                                txData.accountId!,
+                                txData.toAccountId!,
+                                txData.amount,
+                                txData.description,
+                                txData.date,
+                                accounts
+                            );
+
+                            // Save both transactions
+                            await addTransaction(expenseTx);
+                            await addTransaction(incomeTx);
+
+                            const msg = `✅ Transfer Rp${txData.amount.toLocaleString('id-ID')} dari ${fromAcc.name} ke ${toAcc.name} berhasil!`;
                             setMessages((prev: any) => [...prev, { role: 'ai', content: msg, id: Date.now() }]);
                             if (aiMode === 'voice') speak(msg);
                         } else {
-                            // Fallback: Treat as Expense if accounts incomplete
-                            await addTransaction({
-                                ...txData,
-                                type: 'expense', // Force type to expense
-                                description: txData.description || 'Transfer Error',
-                                category: txData.category || 'Lain-lain'
-                            });
-                            const msg = `⚠️ Tujuan transfer tidak ditemukan. Dicatat sebagai Pengeluaran: Rp${txData.amount.toLocaleString('id-ID')}`;
-                            setMessages((prev: any) => [...prev, { role: 'ai', content: msg, id: Date.now() }]);
-                            if (aiMode === 'voice') speak(msg);
+                            throw new Error("Akun transfer tidak valid");
                         }
                     }
                     // Handle Income/Expense
@@ -642,7 +695,7 @@ export default function App() {
                         if (aiMode === 'voice') speak(msg);
                     }
                 }
-                // Handle Other Intents (Query, Advice, etc.)
+                // Handle Other Intents
                 else {
                     const aiText = response.data || response.message;
                     setMessages((prev: any) => [...prev, { role: 'ai', content: aiText, id: Date.now() }]);
@@ -651,7 +704,7 @@ export default function App() {
 
             } catch (error: any) {
                 console.error('AI Processing Error:', error);
-                const errMsg = "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
+                const errMsg = error.message || "Maaf, terjadi kesalahan saat memproses permintaan Anda.";
                 setMessages((prev: any) => [...prev, { role: 'ai', content: errMsg, id: Date.now() }]);
                 if (aiMode === 'voice') speak(errMsg);
             } finally {
@@ -781,6 +834,19 @@ export default function App() {
         await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'accounts', id));
         if (selectedAccountId === id) setSelectedAccountId(null);
         showNotification("Akun dihapus.", 'success');
+    };
+
+    const handleReconciliationSave = async (transaction: any) => {
+        if (!user) return;
+
+        // Add transaction
+        await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'transactions'), transaction);
+
+        // Update account balance (optional, but good for immediate UI feedback if strictly tracked)
+        // Note: FinancialCore calculates balance from transactions dynamically, so just adding tx is enough!
+
+        showNotification("Rekonsiliasi berhasil disimpan!", 'success');
+        setReconciliationModalOpen(false);
     };
 
     // Create default "Cash" account if none exist
@@ -1007,52 +1073,117 @@ export default function App() {
             {selectedTransaction && (
                 <div className="fixed inset-0 z-[160] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-200">
                     <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
-                        <div className="flex justify-between items-start mb-6">
-                            <div>
-                                <h3 className="text-lg font-bold">Detail Transaksi</h3>
-                                <p className="text-xs text-slate-400">{selectedTransaction.date.split('T')[0]}</p>
-                            </div>
-                            <button onClick={() => setSelectedTransaction(null)} className="p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><X size={18} /></button>
-                        </div>
+                        {(() => {
+                            // Calculate enhanced details on fly
+                            let detail;
+                            try {
+                                detail = TransactionDisplayService.buildTransactionDetail(selectedTransaction, accounts, transactions);
+                            } catch (e) {
+                                // Fallback if account missing
+                                detail = { ...selectedTransaction, account: { name: 'Unknown', icon: '?' } } as any;
+                            }
 
-                        <div className="text-center mb-8">
-                            <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 ${selectedTransaction.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
-                                {selectedTransaction.type === 'income' ? <Wallet size={32} /> : <ShoppingBag size={32} />}
-                            </div>
-                            <h2 className={`text-3xl font-black ${selectedTransaction.type === 'income' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                {selectedTransaction.type === 'income' ? '+' : '-'} {formatCurrency(selectedTransaction.amount)}
-                            </h2>
-                            <p className="font-medium text-slate-500 mt-2">{selectedTransaction.description}</p>
-                            {selectedTransaction.merchant && <p className="text-xs font-bold uppercase tracking-widest text-indigo-500 mt-1">{selectedTransaction.merchant}</p>}
-                        </div>
-
-                        {selectedTransaction.items && selectedTransaction.items.length > 0 && (
-                            <div className="mb-6">
-                                <h4 className="font-bold text-sm mb-3 flex items-center gap-2"><Receipt size={14} /> Item Belanja</h4>
-                                <div className="space-y-2 bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl">
-                                    {selectedTransaction.items.map((item, idx) => (
-                                        <div key={idx} className="flex justify-between text-sm">
-                                            <span>{item.qty}x {item.name}</span>
-                                            <span className="font-bold text-slate-500">{formatCurrency(item.price * item.qty)}</span>
+                            return (
+                                <>
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div>
+                                            <h3 className="text-lg font-bold">Detail Transaksi</h3>
+                                            <p className="text-xs text-slate-400">{TransactionDisplayService.formatDisplayDate(selectedTransaction.date)} • {selectedTransaction.date.split('T')[1]?.slice(0, 5) || ''}</p>
                                         </div>
-                                    ))}
-                                    <div className="border-t border-slate-200 dark:border-slate-700 mt-2 pt-2 flex justify-between font-bold">
-                                        <span>Total</span>
-                                        <span>{formatCurrency(selectedTransaction.amount)}</span>
+                                        <button onClick={() => setSelectedTransaction(null)} className="p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><X size={18} /></button>
                                     </div>
-                                </div>
-                            </div>
-                        )}
 
-                        <button
-                            onClick={() => confirmDeleteTransaction(selectedTransaction.id)}
-                            className="w-full py-4 rounded-2xl bg-rose-50 text-rose-500 font-bold hover:bg-rose-100 transition-colors flex items-center justify-center gap-2"
-                        >
-                            <Trash2 size={18} /> Hapus Transaksi
-                        </button>
+                                    <div className="text-center mb-8">
+                                        <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 ${selectedTransaction.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                                            {selectedTransaction.type === 'income' ? <Wallet size={32} /> : <ShoppingBag size={32} />}
+                                        </div>
+                                        <h2 className={`text-3xl font-black ${selectedTransaction.type === 'income' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                            {selectedTransaction.type === 'income' ? '+' : '-'} {formatCurrency(selectedTransaction.amount)}
+                                        </h2>
+                                        <p className="font-medium text-slate-500 mt-2">{selectedTransaction.description}</p>
+
+                                        {/* Account Badge */}
+                                        <div className="flex justify-center mt-3">
+                                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-full text-xs font-bold text-slate-600 dark:text-slate-300">
+                                                <span>{detail.account?.icon}</span>
+                                                <span>{detail.account?.name}</span>
+                                                <span className="opacity-50">•</span>
+                                                <span>Sisa: {formatCurrency(detail.account?.balanceAfter || 0)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Recurring Badge */}
+                                        {selectedTransaction.isRecurring && (
+                                            <div className="mt-2 text-xs text-indigo-500 font-bold flex justify-center items-center gap-1">
+                                                <Calendar size={12} /> Transaksi Rutin
+                                            </div>
+                                        )}
+
+                                        {/* Reconciliation Badge */}
+                                        {selectedTransaction.isReconciliation && (
+                                            <div className="mt-2 text-xs text-amber-500 font-bold flex justify-center items-center gap-1">
+                                                <CheckCircle2 size={12} /> Penyesuaian Saldo
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Transfer Info */}
+                                    {detail.transferInfo && (
+                                        <div className="mb-6 bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border border-slate-100 dark:border-slate-700">
+                                            <h4 className="font-bold text-xs uppercase text-slate-400 mb-2">Detail Transfer</h4>
+                                            <div className="flex items-center justify-between text-sm">
+                                                <div className="flex items-center gap-2">
+                                                    <span>{detail.transferInfo.fromAccount.icon}</span>
+                                                    <span>{detail.transferInfo.fromAccount.name}</span>
+                                                </div>
+                                                <div className="text-slate-400">➜</div>
+                                                <div className="flex items-center gap-2">
+                                                    <span>{detail.transferInfo.toAccount.icon}</span>
+                                                    <span>{detail.transferInfo.toAccount.name}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {selectedTransaction.items && selectedTransaction.items.length > 0 && (
+                                        <div className="mb-6">
+                                            <h4 className="font-bold text-sm mb-3 flex items-center gap-2"><Receipt size={14} /> Item Belanja</h4>
+                                            <div className="space-y-2 bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl">
+                                                {selectedTransaction.items.map((item, idx) => (
+                                                    <div key={idx} className="flex justify-between text-sm">
+                                                        <span>{item.qty}x {item.name}</span>
+                                                        <span className="font-bold text-slate-500">{formatCurrency(item.price * item.qty)}</span>
+                                                    </div>
+                                                ))}
+                                                <div className="border-t border-slate-200 dark:border-slate-700 mt-2 pt-2 flex justify-between font-bold">
+                                                    <span>Total</span>
+                                                    <span>{formatCurrency(selectedTransaction.amount)}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <button
+                                        onClick={() => confirmDeleteTransaction(selectedTransaction.id)}
+                                        className="w-full py-4 rounded-2xl bg-rose-50 text-rose-500 font-bold hover:bg-rose-100 transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <Trash2 size={18} /> Hapus Transaksi
+                                    </button>
+                                </>
+                            );
+                        })()}
                     </div>
                 </div>
             )}
+
+            <ReconciliationModal
+                isOpen={reconciliationModalOpen}
+                onClose={() => setReconciliationModalOpen(false)}
+                account={accounts.find(a => a.id === selectedAccountId)}
+                accounts={accounts}
+                transactions={transactions}
+                onSave={handleReconciliationSave}
+            />
 
             {/* Header */}
             <header className="px-6 pt-10 pb-4 flex justify-between items-center bg-white dark:bg-slate-950/50 backdrop-blur-sm sticky top-0 z-10 transition-colors duration-300">
@@ -1181,6 +1312,47 @@ export default function App() {
                                         </div>
                                     </div>
 
+
+                                    {/* Account Actions Bar - Only visible when account selected */}
+                                    {selectedAccountId && (
+                                        <div className="mb-6 animate-in slide-in-from-top-4 fade-in duration-300">
+                                            <div className="bg-white dark:bg-slate-900 p-4 rounded-[24px] border border-slate-100 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="p-2 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 rounded-full">
+                                                        <Settings size={18} />
+                                                    </div>
+                                                    <div>
+                                                        <p className="font-bold text-sm">Aksi Akun</p>
+                                                        <p className="text-[10px] text-slate-500">Kelola akun terpilih</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => setReconciliationModalOpen(true)}
+                                                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                                                    >
+                                                        <CheckCircle2 size={14} /> Rekonsiliasi
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setAccountForm(accounts.find(a => a.id === selectedAccountId) || {});
+                                                            setShowAccountManager(true);
+                                                        }}
+                                                        className="p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 rounded-xl hover:bg-slate-200"
+                                                    >
+                                                        <Edit size={18} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => deleteAccount(selectedAccountId!)}
+                                                        className="p-2 bg-rose-50 dark:bg-rose-900/30 text-rose-500 rounded-xl hover:bg-rose-100"
+                                                    >
+                                                        <Trash2 size={18} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Today + Health Score Row */}
                                     <div className="grid grid-cols-2 gap-3">
                                         {/* Today's Spending */}
@@ -1247,6 +1419,62 @@ export default function App() {
                                             <span className="text-[9px] text-rose-500 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"></span> Pengeluaran</span>
                                         </div>
                                     </div>
+
+                                    {/* NEW: Recurring Transactions Widget */}
+                                    {(() => {
+                                        const recurring = FinancialCore.detectRecurringTransactions(transactions);
+                                        if (recurring.length > 0) {
+                                            return (
+                                                <div className="mb-6 bg-white dark:bg-slate-900 p-5 rounded-[24px] border border-slate-100 dark:border-slate-800 shadow-sm">
+                                                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                                                        <Calendar size={20} className="text-indigo-600" />
+                                                        Tagihan Rutin ({recurring.length})
+                                                    </h3>
+                                                    <div className="space-y-3">
+                                                        {recurring.slice(0, 3).map((r: any, idx: number) => (
+                                                            <div key={idx} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                                                                <div>
+                                                                    <p className="font-bold text-sm">{r.merchant}</p>
+                                                                    <p className="text-xs text-slate-500">{r.category} • {r.frequency}</p>
+                                                                </div>
+                                                                <div className="text-right">
+                                                                    <p className="font-bold text-sm">Rp{r.averageAmount.toLocaleString('id-ID')}</p>
+                                                                    <p className="text-[10px] text-slate-400">Next: {r.nextExpected.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}</p>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+                                        return null;
+                                    })()}
+
+                                    {/* NEW: Anomaly Detector Widget */}
+                                    {(() => {
+                                        const anomalies = FinancialCore.detectAnomalies(transactions, 60);
+                                        const highSeverity = anomalies.filter((a: any) => a.severity === 'high');
+
+                                        if (highSeverity.length > 0) {
+                                            return (
+                                                <div className="mb-6 bg-rose-50 dark:bg-rose-900/20 p-5 rounded-[24px] border border-rose-200 dark:border-rose-800">
+                                                    <h3 className="font-bold text-rose-700 dark:text-rose-400 mb-3 flex items-center gap-2">
+                                                        <AlertCircle size={20} />
+                                                        Pengeluaran Tidak Biasa
+                                                    </h3>
+                                                    <div className="space-y-2">
+                                                        {highSeverity.slice(0, 3).map((a: any, idx: number) => (
+                                                            <div key={idx} className="text-sm border-b border-rose-100 last:border-0 pb-2 last:pb-0">
+                                                                <p className="font-bold text-rose-800 dark:text-rose-300">{a.description}</p>
+                                                                <p className="text-xs text-rose-600 dark:text-rose-400">{a.anomalyReason}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+                                        return null;
+                                    })()}
 
                                     {/* Budget Alerts */}
                                     {showBudgetWidget && (
@@ -1352,8 +1580,12 @@ export default function App() {
                                         onClick={async () => {
                                             setIsAnalyzing(true);
                                             try {
-                                                const currentMonth = new Date().toISOString().slice(0, 7);
-                                                const result = await AnalyticsService.generateMonthlyInsight(transactions, currentMonth);
+                                                // const currentMonth = new Date().toISOString().slice(0, 7);
+                                                // const result = await AnalyticsService.generateMonthlyInsight(transactions, currentMonth);
+                                                const result = await FinancialReportService.generateFinancialHealthReport(
+                                                    accounts,
+                                                    transactions
+                                                );
                                                 setInsight(result);
                                             } catch (e) {
                                                 showNotification("Gagal generate analisis", 'error');
@@ -1442,7 +1674,7 @@ export default function App() {
                                 className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold"
                             >
 
-                                {categories.map((c, idx) => <option key={idx} value={c}>{c}</option>)}
+                                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
 
@@ -1594,13 +1826,28 @@ export default function App() {
                                         <p className="text-sm text-slate-500">Menganalisa {transactions.length} data transaksi Anda. Tanyakan apa saja!</p>
                                     </div>
                                 )}
-                                {messages.map(m => (
+                                {messages.map((m, index) => (
                                     <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                         <div className={`max-w-[85%] p-5 rounded-3xl ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none shadow-lg' : 'bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-tl-none shadow-sm'}`}>
                                             {m.imageUrl && (
                                                 <img src={m.imageUrl} alt="Uploaded" className="mb-2 rounded-xl max-h-40 object-cover" />
                                             )}
                                             <FormattedMessage content={m.content} isUser={m.role === 'user'} />
+
+                                            {/* Account Selection UI */}
+                                            {m.role === 'ai' && pendingTransaction && index === messages.length - 1 && (
+                                                <div className="mt-4 flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                                    {accounts.map(acc => (
+                                                        <button
+                                                            key={acc.id}
+                                                            onClick={() => handleAccountSelection(acc.id)}
+                                                            className="flex items-center gap-2 px-4 py-2 bg-indigo-50 dark:bg-slate-800 text-indigo-700 dark:text-indigo-400 rounded-xl text-xs font-bold hover:bg-indigo-100 dark:hover:bg-slate-700 transition-colors border border-indigo-100 dark:border-slate-700"
+                                                        >
+                                                            <span className="text-lg">{acc.icon}</span> {acc.name}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
