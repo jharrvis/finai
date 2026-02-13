@@ -1,0 +1,39 @@
+export interface AIConfig {
+    models: {
+        fast: string;
+        smart: string;
+        vision: string;
+    };
+    maxRetries: number;
+    timeout: number;
+    maxHistoryTurns: number;
+    maxContextTokens: number;
+}
+
+export type IntentType = 'transaction' | 'query' | 'advice' | 'planning' | 'analysis';
+
+export interface Intent {
+    type: IntentType;
+    confidence: number;
+    entities?: Record<string, any>;
+}
+
+export interface TransactionData {
+    type: 'expense' | 'income' | 'transfer';
+    amount: number;
+    category: string;
+    description: string;
+    date: string;
+    accountId?: string;
+    toAccountId?: string; // For transfers
+    merchant?: string;
+    items?: { name: string; qty: number; price: number }[];
+}
+
+export interface AIResponse {
+    success: boolean;
+    data?: any;
+    message?: string;
+    error?: string;
+    intent?: Intent;
+}
